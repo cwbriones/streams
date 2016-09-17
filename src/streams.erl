@@ -10,7 +10,12 @@
     map/2,
     filter/2,
     take/2,
-    to_list/1
+    to_list/1,
+    iterate/2,
+    flatmap/2,
+    chain/2,
+    uniq/1,
+    foldl/3
   ]).
 
 -type stream(A) :: fun(() -> halt | {A, stream(A)}).
@@ -22,18 +27,67 @@
 %% `halt' if `Stream' is empty.
 %% @end
 -spec yield(Stream :: stream(A)) -> halt | {A, stream(A)}.
-yield(F) when is_function(F) -> F().
+yield(F) when is_function(F) -> F();
+yield([X|Xs]) -> {X, Xs};
+yield([]) -> halt;
+yield(M) when is_map(M) ->
+  yield(maps:to_list(M)).
 
 %% @doc
 %% Returns the stream of all natural numbers.
 %% @end
 -spec naturals() -> stream(integer()).
-naturals() -> naturals(0).
+naturals() -> iterate(fun(N) -> N + 1 end, 0).
 
-%% @private
-naturals(N) ->
+-spec iterate(fun((A) -> A), A) -> stream(A).
+iterate(F, Acc) ->
   fun() ->
-    {N, naturals(N + 1)}
+    {Acc, do_iterate(F, Acc)}
+  end.
+
+do_iterate(F, Last) ->
+  fun() ->
+    Next = F(Last),
+    {Next, do_iterate(F, Next)}
+  end.
+
+-spec chain(stream(A), stream(A)) -> stream(A) when A :: any().
+chain(A, B) ->
+  fun() ->
+    case yield(A) of
+      {X, Xs} -> {X, chain(Xs, B)};
+      halt -> yield(B)
+    end
+  end.
+
+-spec flatmap(fun((A) -> [B]), stream(A)) -> stream(B).
+flatmap(Fun, Stream) ->
+  fun() ->
+    case yield(Stream) of
+      {X, Xs} ->
+        Chained = chain(Fun(X), flatmap(Fun, Xs)),
+        yield(Chained);
+      halt -> halt
+    end
+  end.
+
+-spec uniq(stream(A)) -> stream(A).
+uniq(Stream) ->
+  do_uniq(Stream, #{}).
+
+do_uniq(Stream, Seen) ->
+  fun() ->
+    case yield(Stream) of
+      {X, Xs} ->
+        case maps:is_key(X, Seen) of
+          true ->
+            yield(do_uniq(Xs, Seen));
+          false ->
+            Rest = do_uniq(Xs, Seen#{X => true}),
+            {X, Rest}
+        end;
+      halt -> halt
+    end
   end.
 
 %% @doc
@@ -100,3 +154,12 @@ take(N, Stream) when N >= 0 ->
       halt -> halt
     end
   end.
+
+-spec foldl(fun((A, B) -> B), B, stream(A)) -> B.
+foldl(F, Acc, Stream) ->
+  foldl_priv(F, Acc, yield(Stream)).
+
+foldl_priv(F, Acc, {X, Xs}) ->
+  NewAcc = F(X, Acc),
+  foldl_priv(F, NewAcc, yield(Xs));
+foldl_priv(_F, Acc, halt) -> Acc.
