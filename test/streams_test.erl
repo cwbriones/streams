@@ -78,6 +78,25 @@ chunk_test() ->
   [] = streams:to_list(Empty),
   ok.
 
+take_while_test() ->
+  Taken = streams:take_while(fun(I) ->
+    I < 10
+  end, streams:naturals()),
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] = streams:to_list(Taken),
+  ok.
+
+drop_test() ->
+  Drop = streams:drop(10, streams:naturals()),
+  expect_elems([10, 11, 12, 13, 14], Drop),
+  ok.
+
+drop_while_test() ->
+  Drop = streams:drop_while(fun(I) ->
+    I < 10
+  end, streams:naturals()),
+  expect_elems([10, 11, 12, 13, 14], Drop),
+  ok.
+
 complicated_stream_test() ->
   %% 0, 1, 2, 3, 4..
   Naturals = streams:naturals(),

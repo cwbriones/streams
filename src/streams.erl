@@ -11,6 +11,7 @@
     map/2,
     filter/2,
     take/2,
+    drop/2,
     to_list/1,
     to_map/1,
     iterate/2,
@@ -19,7 +20,9 @@
     uniq/1,
     foldl/3,
     zip/2,
-    chunk/2
+    chunk/2,
+    take_while/2,
+    drop_while/2
   ]).
 
 -type stream(A) :: fun(() -> halt | {A, stream(A)}).
@@ -184,6 +187,31 @@ do_chunk(M, N, Stream, Acc) ->
           {lists:reverse(Acc), []}
       end
   end.
+
+-spec take_while(fun((A) -> boolean()), stream(A)) -> stream(A).
+take_while(F, Stream) ->
+  lazily(fun(X, Xs) ->
+    case F(X) of
+      true -> {X, take_while(F, Xs)};
+      false -> halt
+    end
+  end, Stream).
+
+-spec drop(non_neg_integer(), stream(A)) -> stream(A).
+drop(0, Stream) -> Stream;
+drop(N, Stream) ->
+  lazily(fun(_, Xs) ->
+    drop(N - 1, Xs)
+  end, Stream).
+
+-spec drop_while(fun((A) -> boolean()), stream(A)) -> stream(A).
+drop_while(F, Stream) ->
+  lazily(fun(X, Xs) ->
+    case F(X) of
+      true -> drop_while(F, Xs);
+      false -> {X, Xs}
+    end
+  end, Stream).
 
 -spec foldl(fun((A, B) -> B), B, stream(A)) -> B.
 foldl(F, Acc, Stream) ->
