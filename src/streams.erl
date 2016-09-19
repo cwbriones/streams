@@ -2,11 +2,12 @@
 %%% @doc Lazily-evaluated iterables for Erlang
 %%% @end
 -module(streams).
--compile([{inline, [{lazily, 2}]}]).
+-compile([{inline, [{lazily, 2}, {id, 1}]}]).
 
 %% API exports
 -export([
     yield/1,
+    lazily/2,
     naturals/0,
     map/2,
     filter/2,
@@ -18,11 +19,21 @@
     flatmap/2,
     chain/2,
     uniq/1,
+    uniq/2,
     foldl/3,
     zip/2,
+    zip/3,
     chunk/2,
     take_while/2,
-    drop_while/2
+    drop_while/2,
+    repeatedly/1,
+    cycle/1,
+    count/1,
+    sum/1,
+    unfold/2,
+    with_index/1,
+    with_index/2,
+    transform/3
   ]).
 
 -type stream(A) :: fun(() -> halt | {A, stream(A)}).
@@ -52,6 +63,8 @@ lazily(F, Stream) ->
     end
   end.
 
+id(A) -> A.
+
 %% @doc
 %% Returns the stream of all natural numbers.
 %% @end
@@ -80,25 +93,26 @@ chain(A, B) ->
   end.
 
 -spec flatmap(fun((A) -> [B]), stream(A)) -> stream(B).
-flatmap(Fun, Stream) ->
-  fun() ->
-    lazily(fun(X, Xs) ->
-      Chained = chain(Fun(X), flatmap(Fun, Xs)),
-      yield(Chained)
-    end, Stream)
-  end.
+flatmap(F, Stream) ->
+  transform(fun(X, UnusedAcc) ->
+    {F(X), UnusedAcc}
+  end, undefined, Stream).
 
 -spec uniq(stream(A)) -> stream(A).
 uniq(Stream) ->
-  do_uniq(Stream, #{}).
+  uniq(fun id/1, Stream).
 
-do_uniq(Stream, Seen) ->
+uniq(F, Stream) ->
+  do_uniq(F, Stream, #{}).
+
+do_uniq(F, Stream, Seen) ->
   lazily(fun(X, Xs) ->
-    case maps:is_key(X, Seen) of
+    Key = F(X),
+    case maps:is_key(Key, Seen) of
       true ->
-        do_uniq(Xs, Seen);
+        do_uniq(F, Xs, Seen);
       false ->
-        Rest = do_uniq(Xs, Seen#{X => true}),
+        Rest = do_uniq(F, Xs, Seen#{Key => true}),
         {X, Rest}
     end
   end, Stream).
@@ -148,13 +162,29 @@ to_map(Stream) ->
 
 -spec zip(stream(A), stream(B)) -> stream({A, B}).
 zip(StreamA, StreamB) ->
+  zip(fun(A, B) -> {A, B} end, StreamA, StreamB).
+
+-spec zip(fun((A, B) -> C), stream(A), stream(B)) -> stream(C).
+zip(F, StreamA, StreamB) ->
   fun() ->
     case {yield(StreamA), yield(StreamB)} of
-      {{A, As}, {B, Bs}} -> {{A, B}, zip(As, Bs)};
+      {{A, As}, {B, Bs}} -> {F(A, B), zip(F, As, Bs)};
       {halt, _} -> halt;
       {_, halt} -> halt
     end
   end.
+
+-spec with_index(stream(A)) -> stream({integer(), A}).
+with_index(Stream) ->
+  with_index(0, Stream).
+
+-spec with_index(integer(), stream(A)) -> stream({integer(), A}).
+with_index(Offset, Stream) ->
+  lazily(fun(X, Xs) ->
+    Y = {Offset, X},
+    Ys = with_index(Offset + 1, Xs),
+    {Y, Ys}
+  end, Stream).
 
 %% @doc
 %% Returns a new stream consisting of the first `N' elements of `Stream'.
@@ -210,6 +240,59 @@ drop_while(F, Stream) ->
     case F(X) of
       true -> drop_while(F, Xs);
       false -> {X, Xs}
+    end
+  end, Stream).
+
+-spec repeatedly(fun(() -> A)) -> stream(A).
+repeatedly(F) ->
+  fun() ->
+    {F(), repeatedly(F)}
+  end.
+
+-spec cycle(stream(A)) -> stream(A).
+cycle(Stream) ->
+  do_cycle(Stream, Stream).
+
+do_cycle(Stream, Original) ->
+  fun() ->
+    case yield(Stream) of
+      {X, Xs} -> {X, do_cycle(Xs, Original)};
+      halt -> do_cycle(Original, Original)
+    end
+  end.
+
+-spec count(stream(any())) -> non_neg_integer().
+count(Stream) ->
+  foldl(fun(_, Acc) -> Acc + 1 end, 0, Stream).
+
+-spec sum(stream(any())) -> number().
+sum(Stream) ->
+  foldl(fun(I, Acc) -> Acc + I end, 0, Stream).
+
+-spec unfold(fun(({A, B}) -> {A, B}), A) -> stream(B).
+unfold(F, Init) ->
+  fun() ->
+    {Init, do_unfold(F, Init)}
+  end.
+
+do_unfold(F, Acc) ->
+  fun() ->
+    case F(Acc) of
+      halt -> halt;
+      {X, Next} -> {X, do_unfold(F, Next)}
+    end
+  end.
+
+transform(F, Acc, Stream) ->
+  lazily(fun(X, Xs) ->
+    case F(X, Acc) of
+      halt -> halt;
+      {[Y], Next} ->
+        Ys = transform(F, Next, Xs),
+        {Y, Ys};
+      {Y, Next} ->
+        Ys = transform(F, Next, Xs),
+        chain(Y, Ys)
     end
   end, Stream).
 

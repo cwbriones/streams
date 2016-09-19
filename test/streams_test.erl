@@ -97,6 +97,25 @@ drop_while_test() ->
   expect_elems([10, 11, 12, 13, 14], Drop),
   ok.
 
+cycle_test() ->
+  Cycle = streams:cycle([1, 2, 3]),
+  expect_elems([1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2], Cycle),
+  ok.
+
+sum_test() ->
+  0 = streams:sum([]),
+  15 = streams:sum([1, 2, 3, 4, 5]),
+  6.0 = streams:sum([1.0, 2.0, 3.0]),
+  ok.
+
+count_test() ->
+  0 = streams:count([]),
+  Nat10 = streams:take(10, streams:naturals()),
+  Nat100 = streams:take(100, streams:naturals()),
+  10 = streams:count(Nat10),
+  100 = streams:count(Nat100),
+  ok.
+
 complicated_stream_test() ->
   %% 0, 1, 2, 3, 4..
   Naturals = streams:naturals(),
