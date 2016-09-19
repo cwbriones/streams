@@ -2,6 +2,7 @@
 %%% @doc Lazily-evaluated iterables for Erlang
 %%% @end
 -module(streams).
+-compile([{inline, [{lazily, 2}]}]).
 
 %% API exports
 -export([
@@ -11,11 +12,14 @@
     filter/2,
     take/2,
     to_list/1,
+    to_map/1,
     iterate/2,
     flatmap/2,
     chain/2,
     uniq/1,
-    foldl/3
+    foldl/3,
+    zip/2,
+    chunk/2
   ]).
 
 -type stream(A) :: fun(() -> halt | {A, stream(A)}).
@@ -27,11 +31,23 @@
 %% `halt' if `Stream' is empty.
 %% @end
 -spec yield(Stream :: stream(A)) -> halt | {A, stream(A)}.
-yield(F) when is_function(F) -> F();
+yield(F) when is_function(F) ->
+  case F() of
+    G when is_function(G) -> yield(G);
+    Yield -> Yield
+  end;
 yield([X|Xs]) -> {X, Xs};
 yield([]) -> halt;
 yield(M) when is_map(M) ->
   yield(maps:to_list(M)).
+
+lazily(F, Stream) ->
+  fun() ->
+    case yield(Stream) of
+      {X, Xs} -> F(X, Xs);
+      halt -> halt
+    end
+  end.
 
 %% @doc
 %% Returns the stream of all natural numbers.
@@ -63,12 +79,10 @@ chain(A, B) ->
 -spec flatmap(fun((A) -> [B]), stream(A)) -> stream(B).
 flatmap(Fun, Stream) ->
   fun() ->
-    case yield(Stream) of
-      {X, Xs} ->
-        Chained = chain(Fun(X), flatmap(Fun, Xs)),
-        yield(Chained);
-      halt -> halt
-    end
+    lazily(fun(X, Xs) ->
+      Chained = chain(Fun(X), flatmap(Fun, Xs)),
+      yield(Chained)
+    end, Stream)
   end.
 
 -spec uniq(stream(A)) -> stream(A).
@@ -76,19 +90,15 @@ uniq(Stream) ->
   do_uniq(Stream, #{}).
 
 do_uniq(Stream, Seen) ->
-  fun() ->
-    case yield(Stream) of
-      {X, Xs} ->
-        case maps:is_key(X, Seen) of
-          true ->
-            yield(do_uniq(Xs, Seen));
-          false ->
-            Rest = do_uniq(Xs, Seen#{X => true}),
-            {X, Rest}
-        end;
-      halt -> halt
+  lazily(fun(X, Xs) ->
+    case maps:is_key(X, Seen) of
+      true ->
+        do_uniq(Xs, Seen);
+      false ->
+        Rest = do_uniq(Xs, Seen#{X => true}),
+        {X, Rest}
     end
-  end.
+  end, Stream).
 
 %% @doc
 %% Applies `Fun' to each element of `Stream', yielding a new stream of
@@ -96,12 +106,9 @@ do_uniq(Stream, Seen) ->
 %% @end
 -spec map(fun((A) -> B), stream(A)) -> stream(B).
 map(Fun, Stream) ->
-  fun() ->
-    case yield(Stream) of
-      {X, Xs} -> {Fun(X), map(Fun, Xs)};
-      halt -> halt
-    end
-  end.
+  lazily(fun(X, Xs) ->
+    {Fun(X), map(Fun, Xs)}
+  end, Stream).
 
 %% @doc
 %% Returns a new stream consisting of all the elements in `Stream' for
@@ -110,18 +117,12 @@ map(Fun, Stream) ->
 -spec filter(fun((A) -> boolean()), stream(A)) -> stream(A)
   when A :: any().
 filter(Fun, Stream) ->
-  fun() -> do_filter(Fun, Stream) end.
-
-%% @private
-do_filter(Fun, Stream) ->
-  case yield(Stream) of
-    {X, Xs} ->
-      case Fun(X) of
-        true -> {X, filter(Fun, Xs)};
-        false -> do_filter(Fun, Xs)
-      end;
-    halt -> halt
-  end.
+  lazily(fun(X, Xs) ->
+    case Fun(X) of
+      true -> {X, filter(Fun, Xs)};
+      false -> filter(Fun, Xs)
+    end
+  end, Stream).
 
 %% @doc
 %% Evaluates `Stream', collecting its elements into a list.
@@ -130,13 +131,26 @@ do_filter(Fun, Stream) ->
 %% indefinitely.
 %% @end
 -spec to_list(stream(A)) -> list(A).
-to_list(Stream) -> to_list(Stream, []).
+to_list(Stream) ->
+  Rev = streams:foldl(fun(A, Acc) ->
+    [A|Acc]
+  end, [], Stream),
+  lists:reverse(Rev).
 
-%% @private
-to_list(Stream, Acc) ->
-  case yield(Stream) of
-    {X, Xs} -> to_list(Xs, [X|Acc]);
-    halt -> lists:reverse(Acc)
+-spec to_map(stream({K, V})) -> map() when K :: any(), V :: any().
+to_map(Stream) ->
+  streams:foldl(fun({K, V}, Acc) ->
+    Acc#{K => V}
+  end, #{}, Stream).
+
+-spec zip(stream(A), stream(B)) -> stream({A, B}).
+zip(StreamA, StreamB) ->
+  fun() ->
+    case {yield(StreamA), yield(StreamB)} of
+      {{A, As}, {B, Bs}} -> {{A, B}, zip(As, Bs)};
+      {halt, _} -> halt;
+      {_, halt} -> halt
+    end
   end.
 
 %% @doc
@@ -144,15 +158,31 @@ to_list(Stream, Acc) ->
 %% @end
 -spec take(integer(), stream(A)) -> stream(A).
 take(N, Stream) when N >= 0 ->
-  fun() ->
-    case yield(Stream) of
-      {X, Xs} ->
-        case N of
-          0 -> halt;
-          _ -> {X, take(N - 1, Xs)}
-        end;
-      halt -> halt
+  lazily(fun(X, Xs) ->
+    case N of
+      0 -> halt;
+      _ -> {X, take(N - 1, Xs)}
     end
+  end, Stream).
+
+-spec chunk(integer(), stream(A)) -> stream([A]).
+chunk(N, Stream) ->
+  fun() ->
+    do_chunk(0, N, Stream, [])
+  end.
+
+do_chunk(N, N, Stream, Acc) ->
+  {lists:reverse(Acc), chunk(N, Stream)};
+do_chunk(M, N, Stream, Acc) ->
+  case yield(Stream) of
+    {X, Xs} ->
+      do_chunk(M + 1, N, Xs, [X|Acc]);
+    halt ->
+      case Acc of
+        [] -> halt;
+        _ ->
+          {lists:reverse(Acc), []}
+      end
   end.
 
 -spec foldl(fun((A, B) -> B), B, stream(A)) -> B.

@@ -67,6 +67,17 @@ foldl_test() ->
   6 = streams:foldl(fun(A, Acc) -> A + Acc end, 0, Taken),
   ok.
 
+chunk_test() ->
+  Chunks = streams:chunk(3, [1, 2, 3, 4, 5, 6, 7, 8]),
+  [[1, 2, 3], [4, 5, 6], [7, 8]] = streams:to_list(Chunks),
+
+  Single = streams:chunk(2, [1, 2]),
+  [[1, 2]] = streams:to_list(Single),
+
+  Empty = streams:chunk(2, []),
+  [] = streams:to_list(Empty),
+  ok.
+
 complicated_stream_test() ->
   %% 0, 1, 2, 3, 4..
   Naturals = streams:naturals(),
