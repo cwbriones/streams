@@ -11,6 +11,7 @@
     naturals/0,
     map/2,
     filter/2,
+    filter_map/2,
     take/2,
     drop/2,
     to_list/1,
@@ -33,7 +34,10 @@
     unfold/2,
     with_index/1,
     with_index/2,
-    transform/3
+    transform/3,
+    group_by/2,
+    split/2,
+    split_while/2
   ]).
 
 -type stream(A) :: fun(() -> halt | {A, stream(A)}).
@@ -138,6 +142,16 @@ filter(Fun, Stream) ->
     case Fun(X) of
       true -> {X, filter(Fun, Xs)};
       false -> filter(Fun, Xs)
+    end
+  end, Stream).
+
+-spec filter_map(fun((A) -> boolean()), stream(A)) -> stream(A)
+  when A :: any().
+filter_map(Fun, Stream) ->
+  lazily(fun(X, Xs) ->
+    case Fun(X) of
+      {true, Y} -> {Y, filter_map(Fun, Xs)};
+      false -> filter_map(Fun, Xs)
     end
   end, Stream).
 
@@ -283,10 +297,35 @@ do_unfold(F, Acc) ->
     end
   end.
 
+group_by(F, Stream) ->
+  group_by(F, Stream, undefined, []).
+
+group_by(F, Stream, Key, Term) ->
+  fun() ->
+    case yield(Stream) of
+      {X, Xs} ->
+        case F(X) of
+          Key -> group_by(F, Xs, Key, [X|Term]);
+          NewKey ->
+            case Term of
+              [] -> group_by(F, Xs, NewKey, [X]);
+              [_|_] -> {Term, group_by(F, Xs, NewKey, [X])}
+            end
+        end;
+      halt ->
+        case Term of
+          [] -> halt;
+          _ -> {lists:reverse(Term), []}
+        end
+    end
+  end.
+
 transform(F, Acc, Stream) ->
   lazily(fun(X, Xs) ->
     case F(X, Acc) of
       halt -> halt;
+      {[], Next} ->
+        transform(F, Next, Xs);
       {[Y], Next} ->
         Ys = transform(F, Next, Xs),
         {Y, Ys};
@@ -295,6 +334,30 @@ transform(F, Acc, Stream) ->
         chain(Y, Ys)
     end
   end, Stream).
+
+split(N, Stream) ->
+  split(N, Stream, []).
+
+split(0, Stream, Acc) ->
+  {lists:reverse(Acc), Stream};
+split(N, Stream, Acc) ->
+  case yield(Stream) of
+    {X, Xs} -> split(N - 1, Xs, [X|Acc]);
+    halt -> {lists:reverse(Acc), []}
+  end.
+
+split_while(F, Stream) ->
+  split_while(F, Stream, []).
+
+split_while(F, Stream, Acc) ->
+  case yield(Stream) of
+    {X, Xs} ->
+      case F(X) of
+        true -> split_while(F, Xs, [X|Acc]);
+        false -> {lists:reverse(Acc), Stream}
+      end;
+    halt -> {lists:reverse(Acc), []}
+  end.
 
 -spec foldl(fun((A, B) -> B), B, stream(A)) -> B.
 foldl(F, Acc, Stream) ->
