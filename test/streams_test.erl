@@ -129,8 +129,15 @@ complicated_stream_test() ->
   Filter = streams:filter(fun(A) -> A rem 2 == 1 end, Uniq),
   %% 2, 6, 10, 14
   Map = streams:map(fun(A) -> A * 2 end, Filter),
-  Taken = streams:take(4, Map),
-  [2, 6, 10, 14] = streams:to_list(Taken),
+  %% Effectively unchanged
+  Taken = streams:take(1000000, Map),
+  %% {1, 2}, {2, 6}, {3, 10}, {4, 14}...
+  Zipped = streams:zip([1, 2, 3, 4], Taken),
+  %% [{1, 2}, {2, 6}, {3, 10}, {4, 14}] ...
+  Chunk = streams:chunk(4, Zipped),
+  %% {0, [{1, 2}, {2, 6}, {3, 10}, {4, 14}]}...
+  Indexed = streams:with_index(Chunk),
+  [{0, [{1, 2}, {2, 6}, {3, 10}, {4, 14}]}] = streams:to_list(Indexed),
   ok.
 
 %% Private
