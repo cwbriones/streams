@@ -44,11 +44,11 @@ flatmap_test() ->
   expect_elems([0, 0, 0, 1, 2, 3, 2, 4, 6], Stream),
   ok.
 
-chain_test() ->
+append_test() ->
   %% 0, 1, 2, 3, 4
   StreamA = streams:take(5, streams:naturals()),
   StreamB = [5, 6, 7, 8],
-  StreamC = streams:chain(StreamA, StreamB),
+  StreamC = streams:append(StreamA, StreamB),
   [0, 1, 2, 3, 4, 5, 6, 7, 8] = streams:to_list(StreamC),
   ok.
 
@@ -60,11 +60,26 @@ uniq_test() ->
   [1, 2, 3, 4, 5] = streams:to_list(streams:uniq(Duplicates)),
   ok.
 
-foldl_test() ->
-  6 = streams:foldl(fun(A, Acc) -> A + Acc end, 0, [1, 2, 3]),
+uniq_by_test() ->
+  Items = [
+    #{a => 1, b => 1},
+    #{a => 1, b => 2},
+    #{a => 2, b => 3},
+    #{a => 2, b => 4},
+    #{a => 1, b => 5}
+  ],
+  Uniq = streams:uniq(fun(M) -> maps:get(a, M) end, Items),
+  [
+    #{a := 1, b := 1},
+    #{a := 2, b := 3}
+  ] = streams:to_list(Uniq),
+  ok.
+
+fold_test() ->
+  6 = streams:fold(fun(A, Acc) -> A + Acc end, 0, [1, 2, 3]),
 
   Taken = streams:take(4, streams:naturals()),
-  6 = streams:foldl(fun(A, Acc) -> A + Acc end, 0, Taken),
+  6 = streams:fold(fun(A, Acc) -> A + Acc end, 0, Taken),
   ok.
 
 chunk_test() ->
