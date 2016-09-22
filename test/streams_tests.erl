@@ -37,8 +37,8 @@ filter_test() ->
   expect_elems([1, 3, 5, 7, 9, 11], Odds),
   ok.
 
-flatmap_test() ->
-  Stream = streams:flatmap(fun(A) ->
+flat_map_test() ->
+  Stream = streams:flat_map(fun(A) ->
     [A, A * 2, A * 3]
   end, streams:naturals()),
   expect_elems([0, 0, 0, 1, 2, 3, 2, 4, 6], Stream),
@@ -56,7 +56,7 @@ uniq_test() ->
   UniqList = streams:uniq([1, 2, 3, 1, 2, 3, 1, 2, 3]),
   [1, 2, 3] = streams:to_list(UniqList),
 
-  Duplicates = streams:flatmap(fun(A) -> [A, A, A] end, [1, 2, 3, 4, 5]),
+  Duplicates = streams:flat_map(fun(A) -> [A, A, A] end, [1, 2, 3, 4, 5]),
   [1, 2, 3, 4, 5] = streams:to_list(streams:uniq(Duplicates)),
   ok.
 
@@ -145,8 +145,8 @@ complicated_stream_test() ->
   %% 0, 1, 2, 3, 4..
   Naturals = streams:naturals(),
   %% 0, 1, 2, 2, 3, 3, 3, 4..
-  FlatMap = streams:flatmap(fun(I) ->
-    lists:seq(0, I)
+  FlatMap = streams:flat_map(fun(I) ->
+    lists:duplicate(I, I)
   end, Naturals),
   %% 0, 1, 2, 3, 4..
   Uniq = streams:uniq(FlatMap),
@@ -156,13 +156,126 @@ complicated_stream_test() ->
   Map = streams:map(fun(A) -> A * 2 end, Filter),
   %% Effectively unchanged
   Taken = streams:take(1000000, Map),
-  %% {1, 2}, {2, 6}, {3, 10}, {4, 14}...
+  %% {1, 2}, {2, 6}, {3, 10}, {4, 14}
   Zipped = streams:zip([1, 2, 3, 4], Taken),
-  %% [{1, 2}, {2, 6}, {3, 10}, {4, 14}] ...
+  %% [{1, 2}, {2, 6}, {3, 10}, {4, 14}]
   Chunk = streams:chunk(4, Zipped),
-  %% {0, [{1, 2}, {2, 6}, {3, 10}, {4, 14}]}...
-  Indexed = streams:with_index(Chunk),
-  [{0, [{1, 2}, {2, 6}, {3, 10}, {4, 14}]}] = streams:to_list(Indexed),
+  %% [{1, 2}, {2, 6}, {3, 10}, {4, 14}], 1
+  Append = streams:append(Chunk, [1]),
+  %% {0, [{1, 2}, {2, 6}, {3, 10}, {4, 14}]}, {1, 1}
+  Indexed = streams:with_index(Append),
+  [{0, [{1, 2}, {2, 6}, {3, 10}, {4, 14}]}, {1, 1}] = streams:to_list(Indexed),
+  ok.
+
+zip_test() ->
+  Infinite = streams:naturals(),
+  Finite = [0, 1, 2, 3],
+
+  expect_elems([{0, 0}, {1, 1}, {2, 2}, {3, 3}], streams:zip(Infinite, Infinite)),
+  [{0, 0}, {1, 1}, {2, 2}, {3, 3}] = streams:to_list(streams:zip(Finite, Infinite)),
+  [{0, 0}, {1, 1}, {2, 2}, {3, 3}] = streams:to_list(streams:zip(Infinite, Finite)),
+  [{0, 0}, {1, 1}, {2, 2}, {3, 3}] = streams:to_list(streams:zip(Finite, Finite)),
+
+  [[0, 0], [1, 1], [2, 2], [3, 3]] =
+    streams:to_list(streams:zip(fun(A, B) -> [A, B] end, Finite, Finite)),
+  ok.
+
+repeatedly_test() ->
+  Server = fun F(State) ->
+    receive
+      {get, From} ->
+        From ! State,
+        F(State + 1)
+    end
+  end,
+  Pid = spawn_link(fun() -> Server(0) end),
+
+  Fun = fun() ->
+    Pid ! {get, self()},
+    receive
+      V -> V
+    end
+  end,
+
+  Repeatedly = streams:repeatedly(Fun),
+  expect_elems([0, 1, 2, 3, 4, 5], Repeatedly),
+  ok.
+
+split_test() ->
+  {[0, 1, 2, 3], Rest} = streams:split(4, streams:naturals()),
+  expect_elems([4, 5, 6, 7], Rest),
+
+  {[0, 1, 2, 3], Rest2} = streams:split_while(fun(F) -> F < 4 end, streams:naturals()),
+  expect_elems([4, 5, 6, 7], Rest2),
+
+  {[], []} = streams:split(4, []),
+  {[1, 2], []} = streams:split(4, [1, 2]),
+  {[], []} = streams:split_while(fun(F) -> F < 4 end, []),
+  {[1, 2, 3], []} = streams:split_while(fun(F) -> F < 4 end, [1, 2, 3]),
+  ok.
+
+builtins_as_streams_test() ->
+  List = lists:seq(1, 100),
+  Map  = maps:from_list([{integer_to_list(I), I} || I <- List]),
+
+  ListMap = lists:map(fun(A) -> A + 1 end, List),
+  ListMap = streams:to_list(streams:map(fun(A) -> A + 1 end, List)),
+
+  MapMap = maps:map(fun(_, V) -> V + 1 end, Map),
+  MapMap = streams:to_map(streams:map(fun({K, V}) -> {K, V + 1} end, Map)),
+  ok.
+
+unfold_test() ->
+  Unfold = streams:unfold(fun(A) ->
+    case A < 5 of
+      true -> {A + 1, A + 1};
+      false -> halt
+    end
+  end, 1),
+  [1, 2, 3, 4, 5] = streams:to_list(Unfold),
+  ok.
+
+group_by_test_() ->
+  TestCases = [
+    {[1, 1, 1, 2, 3, 3, 4, 4, 4], [[1, 1, 1], [2], [3, 3], [4, 4, 4]]},
+    {[], []},
+    {[1], [[1]]}
+  ],
+  lists:map(fun({Input, Output}) ->
+    fun() ->
+      GroupBy = streams:group_by(fun(A) -> A end, Input),
+      Output = streams:to_list(GroupBy)
+    end
+  end, TestCases).
+
+transform_test() ->
+  Take = fun(N, Stream) ->
+    streams:transform(fun
+      (_, 0) -> halt;
+      (X, NN) -> {[X], NN - 1}
+    end, N, Stream)
+  end,
+  Filter = fun(F, Stream) ->
+    streams:transform(fun(X, Acc) ->
+      case F(X) of
+        true -> {[X], Acc};
+        false -> {[], Acc}
+      end
+    end, undefined, Stream)
+  end,
+  Taken = Take(5, Filter(fun(A) -> A rem 2 == 0 end, streams:naturals())),
+  [0, 2, 4, 6, 8] = streams:to_list(Taken),
+  ok.
+
+motivating_primes_test() ->
+  Candidates = streams:iterate(fun(I) -> I + 1 end, 2),
+  PPrimes = fun FilterPrimes(Stream) ->
+    streams:lazily(fun(P, Xs) ->
+      {P, FilterPrimes(streams:filter(fun(Y) -> Y rem P =/= 0 end, Xs))}
+    end, Stream)
+  end,
+  Primes = PPrimes(Candidates),
+  ?assertMatch([2, 3, 5, 7, 11, 13, 17, 19, 23, 29], streams:to_list(streams:take(10, Primes))),
   ok.
 
 %% Private

@@ -15,7 +15,7 @@
     drop_while/2,
     filter/2,
     filter_map/2,
-    flatmap/2,
+    flat_map/2,
     group_by/2,
     lazily/2,
     map/2,
@@ -92,8 +92,8 @@ id(A) -> A.
 naturals() -> iterate(fun(N) -> N + 1 end, 0).
 
 %% @doc
-%% Creates a stream by emitting `Acc' followed by the series
-%% of values result from repeated application of `F'.
+%% Creates a stream by emitting `Acc' followed by the sequence
+%% of values resulting from applying `F' to the previous value.
 %% @end
 -spec iterate(fun((A) -> A), A) -> stream(A).
 iterate(F, Acc) ->
@@ -108,15 +108,15 @@ do_iterate(F, Last) ->
   end.
 
 %% @doc
-%% Creates a connected stream that emits values from `B' after
-%% `A' has been exhausted.
+%% Creates a stream that first yields all values from `StreamA' followed
+%% by all values in `StreamB'.
 %% @end
 -spec append(stream(A), stream(A)) -> stream(A) when A :: any().
-append(A, B) ->
+append(StreamA, StreamB) ->
   fun() ->
-    case yield(A) of
-      {X, Xs} -> {X, append(Xs, B)};
-      halt -> yield(B)
+    case yield(StreamA) of
+      {X, Xs} -> {X, append(Xs, StreamB)};
+      halt -> yield(StreamB)
     end
   end.
 
@@ -124,8 +124,8 @@ append(A, B) ->
 %% Creates a stream by applying `F' to each element of `Stream',
 %% concatenating the resulting streams.
 %% @end
--spec flatmap(fun((A) -> stream(B)), stream(A)) -> stream(B).
-flatmap(F, Stream) ->
+-spec flat_map(fun((A) -> stream(B)), stream(A)) -> stream(B).
+flat_map(F, Stream) ->
   transform(fun(X, UnusedAcc) ->
     {F(X), UnusedAcc}
   end, undefined, Stream).
@@ -204,7 +204,7 @@ filter_map(F, Stream) ->
 %% @doc
 %% Evaluates `Stream', collecting its elements into a list.
 %%
-%% Warning: If a stream is infinite this function this function will loop
+%% Warning: If `Stream' is infinite this function this function will loop
 %% indefinitely.
 %% @end
 -spec to_list(stream(A)) -> list(A).
@@ -218,7 +218,7 @@ to_list(Stream) ->
 %% Evaluates `Stream', collecting its elements into a map. The stream must
 %% emit tuples.
 %%
-%% Warning: If a stream is infinite this function this function will loop
+%% Warning: If `Stream' is infinite this function this function will loop
 %% indefinitely.
 %% @end
 -spec to_map(stream({K, V})) -> map() when K :: any(), V :: any().
@@ -274,7 +274,7 @@ with_index(Offset, Stream) ->
   end, Stream).
 
 %% @doc
-%% Returns a new stream consisting of the first `N' elements of `Stream'.
+%% Creates a new stream consisting of the first `N' elements of `Stream'.
 %% @end
 -spec take(integer(), stream(A)) -> stream(A).
 take(N, Stream) when N >= 0 ->
@@ -358,6 +358,9 @@ repeatedly(F) ->
 %%
 %% Note that if `Stream' is infinite this effectively returns the
 %% same stream.
+%%
+%% Warning: If `Stream' is empty this function this function will loop
+%% indefinitely.
 %% @end
 -spec cycle(stream(A)) -> stream(A).
 cycle(Stream) ->
@@ -374,7 +377,7 @@ do_cycle(Stream, Original) ->
 %% @doc
 %% Counts the number of elements in `Stream'.
 %%
-%% Warning: If a stream is infinite this function this function will loop
+%% Warning: If `Stream' is infinite this function this function will loop
 %% indefinitely.
 %% @end
 -spec count(stream(any())) -> non_neg_integer().
@@ -384,7 +387,7 @@ count(Stream) ->
 %% @doc
 %% Returns the sum of elements in `Stream'.
 %%
-%% Warning: If a stream is infinite this function this function will loop
+%% Warning: If `Stream' is infinite this function this function will loop
 %% indefinitely.
 %% @end
 -spec sum(stream(any())) -> number().
@@ -392,11 +395,12 @@ sum(Stream) ->
   fold(fun(I, Acc) -> Acc + I end, 0, Stream).
 
 %% @doc
-%% Creates a stream by repeatedly going through `Stream', looping around when
-%% it is exhausted.
+%% Unfolds a stream from a seed value `Init'.
 %%
-%% Note that if `Stream' is infinite this effectively returns the
-%% same stream.
+%% The stream will yield `Init', and then call `F' with it as the initial
+%% accumulator to generate subsequent values.
+%%
+%% `F' is expected to either return `{NextItem, NextAcc}' or `halt'.
 %% @end
 -spec unfold(fun(({A, B}) -> {A, B}), A) -> stream(B).
 unfold(F, Init) ->
@@ -415,9 +419,6 @@ do_unfold(F, Acc) ->
 %% @doc
 %% Creates a stream that groups continguous sequences of elements for which
 %% `F' returns the same value.
-%%
-%% Note that if `Stream' is infinite this effectively returns the
-%% same stream.
 %% @end
 -spec group_by(fun((A) -> B), stream(A)) -> stream([A]) when B :: any().
 group_by(F, Stream) ->
@@ -447,7 +448,7 @@ group_by(F, Stream, Key, Term) ->
 %% Transforms an existing `Stream'.
 %%
 %% Transform expects a function that takes the next element of `Stream' and the current
-%% accumulator, returning either a stream and new accumulator or `halt', in which case
+%% accumulator, returning either `{Iterable, NewAccumulator}' or `halt', in which case
 %% the resulting stream halts.
 %% @end
 -spec transform(fun((A, B) -> {stream(C), B} | halt), B, stream(A)) -> stream(C).
@@ -484,6 +485,7 @@ split(N, Stream, Acc) ->
 
 %% @doc
 %% Collects elements from `Stream' into a list until `F' returns false.
+%%
 %% Returns the collected elements as well as the remaining stream.
 %% @end
 -spec split_while(fun((A) -> boolean()), stream(A)) -> {[A], stream(A)}.
@@ -506,7 +508,7 @@ split_while(F, Stream, Acc) ->
 %%
 %% Returns the final accumulator.
 %%
-%% Warning: If a stream is infinite this function this function will loop
+%% Warning: If `Stream' is infinite this function this function will loop
 %% indefinitely.
 %% @end
 -spec fold(fun((A, B) -> B), B, stream(A)) -> B.
