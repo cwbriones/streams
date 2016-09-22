@@ -196,6 +196,7 @@ filter_map(F, Stream) ->
   lazily(fun(X, Xs) ->
     case F(X) of
       {true, Y} -> {Y, filter_map(F, Xs)};
+      true -> {X, filter_map(F, Xs)};
       false -> filter_map(F, Xs)
     end
   end, Stream).

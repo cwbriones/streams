@@ -1,4 +1,4 @@
--module(streams_test).
+-module(streams_tests).
 -include_lib("eunit/include/eunit.hrl").
 
 list_test() ->
@@ -130,6 +130,16 @@ count_test() ->
   10 = streams:count(Nat10),
   100 = streams:count(Nat100),
   ok.
+
+filter_map_test() ->
+  FilterMap = streams:filter_map(fun(I) ->
+    case I rem 3 of
+      0 -> false;
+      1 -> true;
+      2 -> {true, I * I}
+    end
+  end, streams:naturals()),
+  expect_elems([1, 4, 4, 25, 7, 64, 10, 121, 13], FilterMap).
 
 complicated_stream_test() ->
   %% 0, 1, 2, 3, 4..
